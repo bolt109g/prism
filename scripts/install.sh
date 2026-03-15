@@ -153,7 +153,9 @@ install_initd() {
 # Запустить сервис
 start_service() {
     if [ -x "$INIT_SCRIPT" ]; then
-        "$INIT_SCRIPT" restart 2>/dev/null || warn "Запустите вручную: $INIT_SCRIPT start"
+        "$INIT_SCRIPT" stop 2>/dev/null || true
+        sleep 1
+        "$INIT_SCRIPT" start || warn "Запустите вручную: $INIT_SCRIPT start"
     else
         warn "Init.d скрипт не найден, запустите вручную: prism --port 8080"
     fi

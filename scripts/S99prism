@@ -28,7 +28,7 @@ stop() {
 }
 
 restart() {
-    stop 2>/dev/null
+    stop 2>/dev/null || true
     sleep 1
     start
 }
