@@ -12,23 +12,21 @@ start() {
     fi
     echo "Starting Prism..."
     mkdir -p /opt/var/run
-    start-stop-daemon --start --background \
-        --make-pidfile --pidfile "$PIDFILE" \
-        --exec "$DAEMON" -- $ARGS
+    start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON" -- $ARGS
 }
 
 stop() {
     if [ ! -f "$PIDFILE" ]; then
         echo "Prism is not running"
-        return 1
+        return 0
     fi
     echo "Stopping Prism..."
-    start-stop-daemon --stop --pidfile "$PIDFILE"
+    start-stop-daemon -K -p "$PIDFILE"
     rm -f "$PIDFILE"
 }
 
 restart() {
-    stop 2>/dev/null || true
+    stop
     sleep 1
     start
 }
