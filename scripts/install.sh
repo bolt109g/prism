@@ -77,6 +77,23 @@ detect_arch() {
     info "Архитектура: $ARCH ($GOARCH)"
 }
 
+# Найти awg-quick / wg-quick в стандартных путях
+find_wg_quick() {
+    for bin in awg-quick wg-quick; do
+        for dir in /opt/bin /opt/sbin /opt/usr/bin /opt/usr/sbin /usr/bin /usr/sbin; do
+            if [ -x "$dir/$bin" ]; then
+                echo "$dir/$bin"
+                return 0
+            fi
+        done
+        if command -v "$bin" >/dev/null 2>&1; then
+            command -v "$bin"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Добавить кастомный opkg-репозиторий для AWG пакетов
 add_awg_repo() {
     REPO_LINE="src/gz awg_custom ${ENTWARE_REPO}/${ARCH}-kn"
@@ -88,53 +105,46 @@ add_awg_repo() {
     info "Репозиторий AWG добавлен"
 }
 
-# Найти awg-quick / wg-quick в стандартных путях
-find_wg_quick() {
-    for bin in awg-quick wg-quick; do
-        for dir in /opt/bin /opt/sbin /opt/usr/bin /opt/usr/sbin /usr/bin /usr/sbin; do
-            if [ -x "$dir/$bin" ]; then
-                echo "$dir/$bin"
-                return 0
-            fi
-        done
-        # Также проверить через PATH
-        if command -v "$bin" >/dev/null 2>&1; then
-            command -v "$bin"
-            return 0
-        fi
-    done
-    return 1
-}
-
-# Установить awg-quick / wg-quick если отсутствуют
-install_wg_tools() {
+# Установить зависимости: wget-ssl (для HTTPS repos), awg-manager (awg-quick)
+install_dependencies() {
     WG_PATH=$(find_wg_quick)
     if [ -n "$WG_PATH" ]; then
         info "Найден: $WG_PATH"
         return
     fi
 
-    info "awg-quick / wg-quick не найдены, устанавливаю..."
+    info "awg-quick не найден, устанавливаю зависимости..."
+
+    # wget-ssl нужен для HTTPS-репозиториев
+    if ! command -v wget-ssl >/dev/null 2>&1 && ! wget --help 2>&1 | grep -q "TLS"; then
+        info "Устанавливаю wget-ssl для HTTPS..."
+        opkg install wget-ssl ca-certificates 2>/dev/null || true
+    fi
+
+    # Добавить кастомный репозиторий
+    add_awg_repo
+
+    # Обновить списки пакетов
     opkg update >/dev/null 2>&1 || true
 
-    # Попытка 1: awg-tools из кастомного репо
-    opkg install awg-tools 2>/dev/null || true
-    WG_PATH=$(find_wg_quick)
-    if [ -n "$WG_PATH" ]; then
-        info "Установлен: $WG_PATH"
-        return
+    # Установить awg-manager (содержит awg-quick и awg)
+    info "Устанавливаю awg-manager (awg-quick + awg)..."
+    if opkg install awg-manager 2>/dev/null; then
+        # Отключить сервис awg-manager — Prism его заменяет
+        if [ -x /opt/etc/init.d/S99awg-manager ]; then
+            /opt/etc/init.d/S99awg-manager stop 2>/dev/null || true
+            chmod -x /opt/etc/init.d/S99awg-manager
+            info "Сервис awg-manager отключён (Prism его заменяет)"
+        fi
     fi
 
-    # Попытка 2: wireguard-tools (стандартный)
-    opkg install wireguard-tools 2>/dev/null || true
     WG_PATH=$(find_wg_quick)
     if [ -n "$WG_PATH" ]; then
-        info "Установлен: $WG_PATH"
-        return
+        info "Готово: $WG_PATH"
+    else
+        warn "awg-quick не найден после установки"
+        warn "Проверьте вручную: opkg files awg-manager"
     fi
-
-    warn "Не удалось найти awg-quick / wg-quick после установки пакетов"
-    warn "Проверьте вручную: opkg files wireguard-tools"
 }
 
 # Получить последнюю версию с GitHub
@@ -288,8 +298,7 @@ show_url() {
 TARGET_VERSION="${1:-}"
 ensure_curl
 detect_arch
-add_awg_repo
-install_wg_tools
+install_dependencies
 fetch_version
 install_binary
 setup_dirs
