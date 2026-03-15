@@ -16,6 +16,8 @@ CONF_DIR="/opt/etc/prism"
 INIT_SCRIPT="/opt/etc/init.d/S99prism"
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 TMP_DIR="/tmp/prism-install"
+ENTWARE_REPO="https://hoaxisr.github.io/entware-repo"
+OPKG_CONF="/opt/etc/opkg/awg.conf"
 
 # Цветной вывод
 info()  { printf "\033[1;32m[+]\033[0m %s\n" "$1"; }
@@ -75,6 +77,52 @@ detect_arch() {
     info "Архитектура: $ARCH ($GOARCH)"
 }
 
+# Добавить кастомный opkg-репозиторий для AWG пакетов
+add_awg_repo() {
+    REPO_LINE="src/gz awg_custom ${ENTWARE_REPO}/${ARCH}-kn"
+    if [ -f "$OPKG_CONF" ] && grep -qF "$REPO_LINE" "$OPKG_CONF" 2>/dev/null; then
+        return
+    fi
+    mkdir -p /opt/etc/opkg
+    echo "$REPO_LINE" > "$OPKG_CONF"
+    info "Репозиторий AWG добавлен"
+}
+
+# Установить awg-quick / wg-quick если отсутствуют
+install_wg_tools() {
+    # Проверить наличие awg-quick или wg-quick
+    if command -v awg-quick >/dev/null 2>&1; then
+        info "awg-quick найден: $(which awg-quick)"
+        return
+    fi
+    if command -v wg-quick >/dev/null 2>&1; then
+        info "wg-quick найден: $(which wg-quick)"
+        return
+    fi
+
+    info "awg-quick / wg-quick не найдены, устанавливаю..."
+    opkg update >/dev/null 2>&1 || true
+
+    # Попытка 1: установить awg-tools (amneziawg) из кастомного репо
+    if opkg install awg-tools 2>/dev/null; then
+        if command -v awg-quick >/dev/null 2>&1; then
+            info "awg-tools установлен"
+            return
+        fi
+    fi
+
+    # Попытка 2: установить wireguard-tools (стандартный WireGuard)
+    if opkg install wireguard-tools 2>/dev/null; then
+        if command -v wg-quick >/dev/null 2>&1; then
+            info "wireguard-tools установлен"
+            return
+        fi
+    fi
+
+    warn "Не удалось автоматически установить awg-quick / wg-quick"
+    warn "Установите вручную: opkg install awg-tools  или  opkg install wireguard-tools"
+}
+
 # Получить последнюю версию с GitHub
 fetch_version() {
     if [ -n "$TARGET_VERSION" ]; then
@@ -83,19 +131,19 @@ fetch_version() {
         return
     fi
 
-    # Метод 1: GitHub API
-    VERSION=$($FETCH "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | \
-        grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+    # Метод 1: redirect header
+    VERSION=$($FETCH -I "https://github.com/$REPO/releases/latest" 2>/dev/null | \
+        sed -n 's/^[Ll]ocation:.*\/v\([^ \t\r]*\).*/\1/p' | tr -d '\r\n')
     if [ -n "$VERSION" ]; then
-        info "Последняя версия (API): $VERSION"
+        info "Последняя версия: $VERSION"
         return
     fi
 
-    # Метод 2: GitHub redirects
-    VERSION=$($FETCH -I "https://github.com/$REPO/releases/latest" 2>/dev/null | \
-        grep -i '^location:' | sed 's|.*/v||' | tr -d '\r\n')
+    # Метод 2: GitHub API
+    VERSION=$($FETCH "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | \
+        grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
     if [ -n "$VERSION" ]; then
-        info "Последняя версия (redirect): $VERSION"
+        info "Последняя версия: $VERSION"
         return
     fi
 
@@ -103,7 +151,7 @@ fetch_version() {
     VERSION=$($FETCH "https://github.com/$REPO/releases" 2>/dev/null | \
         grep -o '/releases/tag/v[0-9][^"]*' | head -1 | sed 's|.*/v||')
     if [ -n "$VERSION" ]; then
-        info "Последняя версия (HTML): $VERSION"
+        info "Последняя версия: $VERSION"
         return
     fi
 
@@ -163,17 +211,18 @@ start_service() {
 
 # Health check
 health_check() {
+    info "Проверяю работоспособность..."
     ATTEMPTS=0
-    MAX_ATTEMPTS=3
+    MAX_ATTEMPTS=5
     while [ "$ATTEMPTS" -lt "$MAX_ATTEMPTS" ]; do
-        sleep 1
+        ATTEMPTS=$((ATTEMPTS + 1))
         if curl -sf http://localhost:8080/api/health >/dev/null 2>&1; then
-            info "Health check пройден"
+            info "Сервис работает!"
             return
         fi
-        ATTEMPTS=$((ATTEMPTS + 1))
+        [ "$ATTEMPTS" -lt "$MAX_ATTEMPTS" ] && sleep 2
     done
-    warn "Health check не пройден — проверьте логи"
+    warn "Сервис не отвечает (может потребоваться больше времени для запуска)"
 }
 
 # Показать URL доступа
@@ -181,17 +230,21 @@ show_url() {
     IP=$(ip -4 addr show br0 2>/dev/null | awk '/inet /{sub(/\/.*/, "", $2); print $2; exit}')
     [ -z "$IP" ] && IP=$(ip -4 addr show eth0 2>/dev/null | awk '/inet /{sub(/\/.*/, "", $2); print $2; exit}')
     [ -z "$IP" ] && IP="192.168.1.1"
+    echo ""
     info "========================================"
     info "  Prism установлен!"
     info "  Открыть: http://${IP}:8080"
     info "  Логин по умолчанию: admin / admin"
     warn "  СМЕНИТЕ ПАРОЛЬ после первого входа!"
     info "========================================"
+    echo ""
 }
 
 TARGET_VERSION="${1:-}"
 ensure_curl
 detect_arch
+add_awg_repo
+install_wg_tools
 fetch_version
 install_binary
 setup_dirs
