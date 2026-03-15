@@ -88,39 +88,53 @@ add_awg_repo() {
     info "Репозиторий AWG добавлен"
 }
 
+# Найти awg-quick / wg-quick в стандартных путях
+find_wg_quick() {
+    for bin in awg-quick wg-quick; do
+        for dir in /opt/bin /opt/sbin /opt/usr/bin /opt/usr/sbin /usr/bin /usr/sbin; do
+            if [ -x "$dir/$bin" ]; then
+                echo "$dir/$bin"
+                return 0
+            fi
+        done
+        # Также проверить через PATH
+        if command -v "$bin" >/dev/null 2>&1; then
+            command -v "$bin"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Установить awg-quick / wg-quick если отсутствуют
 install_wg_tools() {
-    # Проверить наличие awg-quick или wg-quick
-    if command -v awg-quick >/dev/null 2>&1; then
-        info "awg-quick найден: $(which awg-quick)"
-        return
-    fi
-    if command -v wg-quick >/dev/null 2>&1; then
-        info "wg-quick найден: $(which wg-quick)"
+    WG_PATH=$(find_wg_quick)
+    if [ -n "$WG_PATH" ]; then
+        info "Найден: $WG_PATH"
         return
     fi
 
     info "awg-quick / wg-quick не найдены, устанавливаю..."
     opkg update >/dev/null 2>&1 || true
 
-    # Попытка 1: установить awg-tools (amneziawg) из кастомного репо
-    if opkg install awg-tools 2>/dev/null; then
-        if command -v awg-quick >/dev/null 2>&1; then
-            info "awg-tools установлен"
-            return
-        fi
+    # Попытка 1: awg-tools из кастомного репо
+    opkg install awg-tools 2>/dev/null || true
+    WG_PATH=$(find_wg_quick)
+    if [ -n "$WG_PATH" ]; then
+        info "Установлен: $WG_PATH"
+        return
     fi
 
-    # Попытка 2: установить wireguard-tools (стандартный WireGuard)
-    if opkg install wireguard-tools 2>/dev/null; then
-        if command -v wg-quick >/dev/null 2>&1; then
-            info "wireguard-tools установлен"
-            return
-        fi
+    # Попытка 2: wireguard-tools (стандартный)
+    opkg install wireguard-tools 2>/dev/null || true
+    WG_PATH=$(find_wg_quick)
+    if [ -n "$WG_PATH" ]; then
+        info "Установлен: $WG_PATH"
+        return
     fi
 
-    warn "Не удалось автоматически установить awg-quick / wg-quick"
-    warn "Установите вручную: opkg install awg-tools  или  opkg install wireguard-tools"
+    warn "Не удалось найти awg-quick / wg-quick после установки пакетов"
+    warn "Проверьте вручную: opkg files wireguard-tools"
 }
 
 # Получить последнюю версию с GitHub
@@ -177,25 +191,56 @@ setup_dirs() {
     info "Директории созданы: $CONF_DIR"
 }
 
-# Установить init.d скрипт
+# Установить init.d скрипт (встроен, чтобы не зависеть от кэша GitHub CDN)
 install_initd() {
-    INITD_DIR="$(dirname "$INIT_SCRIPT")"
-    mkdir -p "$INITD_DIR"
+    mkdir -p "$(dirname "$INIT_SCRIPT")"
+    cat > "$INIT_SCRIPT" << 'INITEOF'
+#!/bin/sh
+DAEMON=/opt/bin/prism
+PIDFILE=/opt/var/run/prism.pid
+ARGS="--port 8080"
 
-    # Попытка скопировать из локального scripts/S99prism
-    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/S99prism" ]; then
-        cp "$SCRIPT_DIR/S99prism" "$INIT_SCRIPT"
+start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "Prism already running (PID $(cat "$PIDFILE"))"
+        return 1
+    fi
+    echo "Starting Prism..."
+    mkdir -p /opt/var/run
+    start-stop-daemon -S -b -m -p "$PIDFILE" -x "$DAEMON" -- $ARGS
+}
+
+stop() {
+    if [ ! -f "$PIDFILE" ]; then
+        echo "Prism is not running"
+        return 0
+    fi
+    echo "Stopping Prism..."
+    start-stop-daemon -K -p "$PIDFILE"
+    rm -f "$PIDFILE"
+}
+
+restart() { stop; sleep 1; start; }
+
+status() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "Prism is running (PID $(cat "$PIDFILE"))"
     else
-        # Скачать из репозитория
-        $FETCH_OUT "$INIT_SCRIPT" \
-            "https://raw.githubusercontent.com/$REPO/main/scripts/S99prism" 2>/dev/null || \
-            warn "Не удалось скачать init.d скрипт"
+        echo "Prism is not running"
+        rm -f "$PIDFILE"
     fi
+}
 
-    if [ -f "$INIT_SCRIPT" ]; then
-        chmod +x "$INIT_SCRIPT"
-        info "Init.d скрипт установлен: $INIT_SCRIPT"
-    fi
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) restart ;;
+    status)  status ;;
+    *)       echo "Usage: $0 {start|stop|restart|status}" ; exit 1 ;;
+esac
+INITEOF
+    chmod +x "$INIT_SCRIPT"
+    info "Init.d скрипт установлен: $INIT_SCRIPT"
 }
 
 # Запустить сервис
