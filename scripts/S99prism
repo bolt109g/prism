@@ -1,0 +1,51 @@
+#!/bin/sh
+# Prism init.d script for Entware on Keenetic
+
+DAEMON=/opt/bin/prism
+PIDFILE=/opt/var/run/prism.pid
+ARGS="--port 8080"
+
+start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "Prism already running (PID $(cat "$PIDFILE"))"
+        return 1
+    fi
+    echo "Starting Prism..."
+    mkdir -p /opt/var/run
+    start-stop-daemon --start --background \
+        --make-pidfile --pidfile "$PIDFILE" \
+        --exec "$DAEMON" -- $ARGS
+}
+
+stop() {
+    if [ ! -f "$PIDFILE" ]; then
+        echo "Prism is not running"
+        return 1
+    fi
+    echo "Stopping Prism..."
+    start-stop-daemon --stop --pidfile "$PIDFILE"
+    rm -f "$PIDFILE"
+}
+
+restart() {
+    stop 2>/dev/null
+    sleep 1
+    start
+}
+
+status() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+        echo "Prism is running (PID $(cat "$PIDFILE"))"
+    else
+        echo "Prism is not running"
+        rm -f "$PIDFILE"
+    fi
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) restart ;;
+    status)  status ;;
+    *)       echo "Usage: $0 {start|stop|restart|status}" ; exit 1 ;;
+esac

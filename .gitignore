@@ -1,0 +1,21 @@
+# Binaries
+prism
+dist/
+*.exe
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Prism runtime data (not in repo)
+/opt/etc/prism/
